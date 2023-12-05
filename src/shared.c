@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <assert.h>
 #include <errno.h>
 #include <pthread.h>
@@ -11,6 +13,7 @@
 #define BOB_WITHDRAW_AMOUNT ((ssize_t)1)
 
 typedef struct {
+    pthread_rwlock_t rwl;
     ssize_t balance;
     ssize_t n_operations;
 } account_t;
@@ -26,28 +29,35 @@ typedef struct {
 } bob_args_t;
 
 void account_init(account_t *account) {
+    pthread_rwlock_init(&account->rwl, NULL);
     account->balance = 0;
     account->n_operations = 0;
 }
 
 void account_deposit(account_t *account, size_t amount) {
+    pthread_rwlock_wrlock(&account->rwl);
     account->balance += amount;
     account->n_operations += 1;
+    pthread_rwlock_unlock(&account->rwl);
 }
 
 ssize_t account_withdraw(account_t *account, size_t amount) {
+    pthread_rwlock_wrlock(&account->rwl);
     if (account->balance >= amount) {
         account->balance -= amount;
         account->n_operations += 1;
+        pthread_rwlock_unlock(&account->rwl);
         return amount;
     }
-
+    pthread_rwlock_unlock(&account->rwl);
     return -1;
 }
 
 void account_print_info(account_t *account) {
+    pthread_rwlock_rdlock(&account->rwl);
     printf("account info: balance= %zd$, #operations = %zd\n", account->balance,
            account->n_operations);
+    pthread_rwlock_unlock(&account->rwl);
 }
 
 void *alice_thread_fn(void *arg) {
@@ -83,7 +93,7 @@ void *bob_thread_fn(void *arg) {
 }
 
 int main(int argc, char **argv) {
-    pthread_t tid[2];
+    pthread_t tid[6];
 
     ssize_t total_ops = 0;
     if (argc > 1) {
@@ -97,7 +107,8 @@ int main(int argc, char **argv) {
 
     bob_args_t bob_args = {.n_withdrawals = total_ops, .account = &account};
 
-    if (pthread_create(&tid[0], NULL, alice_thread_fn, (void *)&alice_args) != 0) {
+    if (pthread_create(&tid[0], NULL, alice_thread_fn, (void *)&alice_args) !=
+        0) {
         fprintf(stderr, "failed to create alice thread: %s\n", strerror(errno));
         exit(EXIT_FAILURE);
     }
@@ -105,9 +116,33 @@ int main(int argc, char **argv) {
         fprintf(stderr, "failed to create bob thread: %s\n", strerror(errno));
         exit(EXIT_FAILURE);
     }
+    if (pthread_create(&tid[2], NULL, (void *)account_print_info,
+                       (void *)&account)) {
+        fprintf(stderr, "failed to create one thread: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    if (pthread_create(&tid[3], NULL, (void *)account_print_info,
+                       (void *)&account)) {
+        fprintf(stderr, "failed to create one thread: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    if (pthread_create(&tid[4], NULL, (void *)account_print_info,
+                       (void *)&account)) {
+        fprintf(stderr, "failed to create one thread: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    if (pthread_create(&tid[5], NULL, (void *)account_print_info,
+                       (void *)&account)) {
+        fprintf(stderr, "failed to create one thread: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
 
     pthread_join(tid[0], NULL);
     pthread_join(tid[1], NULL);
+    pthread_join(tid[2], NULL);
+    pthread_join(tid[3], NULL);
+    pthread_join(tid[4], NULL);
+    pthread_join(tid[5], NULL);
 
     printf("end of financial history\n");
     account_print_info(&account);
